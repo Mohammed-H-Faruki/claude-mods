@@ -1,0 +1,8 @@
+{
+  "name": "claude-mods",
+  "description": "My Claude Code mods",
+  "owner": { "name": "moham" },
+  "plugins": [
+    { "name": "crab-office", "source": "./mods/crab-office", "description": "Pixel crabs work in an office above the prompt; subagents walk in and sit, and you can click one to see its work." }
+  ]
+}
