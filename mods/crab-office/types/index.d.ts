@@ -25,9 +25,12 @@ export type Agent = {
   // [done, total] from its last TodoWrite, if it keeps a todo list.
   todo: [number, number] | null
   bubble: string | null
+  // Set on finished agents kept in history.
+  ended?: number
 }
 
-export type Office = { agents: Agent[]; selected: string | null }
+// past: finished agents (main's turns too), newest first, for the History view.
+export type Office = { agents: Agent[]; past: Agent[]; showPast: boolean; selected: string | null }
 
 declare module 'claude-code' {
   interface PluginState {

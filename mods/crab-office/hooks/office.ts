@@ -4,7 +4,8 @@ const W = 800
 const H = 260
 const O = '#D97757' // Claude orange
 const DARK = '#2a1d17'
-const SPEED = 90 // px per second: a slow stroll
+const SPEED = 55 // px per second: a slow stroll
+export const MIN_SEAT = 8000 // a crab stays seated at least this long before leaving
 const DOOR = { x: 830, y: 218 }
 const CORRIDOR = 218
 
@@ -184,7 +185,9 @@ function agentSvg(a: Agent, now: number, css: string[]): string {
   const worried = !!a.bubble
   if (a.out) {
     if (el >= dur) return ''
+    // A leave set in the future (MIN_SEAT) holds the first frame, at the chair, until then.
     css.push(keyframes(id, [...route(a.desk)].reverse(), true))
+    if (el < 0) return `<g style="animation:${id} ${dur.toFixed(2)}s linear ${(-el).toFixed(2)}s both"><g class="sit">${crab(a.job, 'rest', worried)}</g></g>`
     return `<g style="animation:${id} ${dur.toFixed(2)}s linear ${(-el).toFixed(2)}s both"><g class="bob">${crab(a.job, 'walk', worried)}</g></g>`
   }
   const t = `--t:${Math.max(0, dur - el).toFixed(2)}s`

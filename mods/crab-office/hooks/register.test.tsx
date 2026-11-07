@@ -17,6 +17,7 @@ test('question shows as text; a subagent gets a crab, tokens and a file tree', a
   on('tool.call', () => ({ result: {} }))
   on('agent.spawn', () => ({ model: 'x', agentId: 'sub1' }))
   on('ui.render', () => ({}))
+  on('turn.complete', () => ({ text: '' }))
 
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.tool.check({ tool: 'Bash', input: {} })
@@ -29,6 +30,13 @@ test('question shows as text; a subagent gets a crab, tokens and a file tree', a
   expect(JSON.stringify(await ui.find({ type: 'Svg' }))).toContain('FIND AUTH CODE')
   expect(await ui.find({ type: 'Button', label: /Find auth code/ })).toBeTruthy()
   await ui.unmount()
+
+  // A finished subagent goes to History but stays seated a while first.
+  await $.turn.complete({ turnId: 's1', agentId: 'sub1', reason: 'answer', answer: '' } as any)
+  const ui2 = await $.ui.mount(BAND)
+  expect(await ui2.find({ type: 'Button', label: /History \(1\)/ })).toBeTruthy()
+  expect(JSON.stringify(await ui2.find({ type: 'Svg' }))).toMatch(/animation:wsub1 [0-9.]+s linear [1-9][0-9.]*s both.{0,20}sit/)
+  await ui2.unmount()
 })
 
 test('tree groups files under folders and counts repeats', () => {

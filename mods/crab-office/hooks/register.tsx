@@ -2,10 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Agent, Job, Office } from '../types'
-import { jobOfType, scene, walkMs } from './office'
+import { MIN_SEAT, jobOfType, scene, walkMs } from './office'
 import { ICON, actOf, addAct, bar, elapsed, fmtTok, nowAct, tree } from './work'
 
-const office = atom({ plugin: 'crab-office', key: 'office' } as const, { agents: [], selected: null } as Office, { shape: 'office-2' })
+const office = atom({ plugin: 'crab-office', key: 'office' } as const, { agents: [], past: [], showPast: false, selected: null } as Office, { shape: 'office-3' })
 const compact = atom({ plugin: 'crab-office', key: 'compact' } as const, false, { shape: 'compact-1' })
 
 // No timers: walks are CSS keyframes placed by elapsed time at each draw, so a
@@ -41,9 +41,9 @@ function todoOf(e: Record<string, unknown>): [number, number] | null {
 }
 
 export const register: Register = on => {
-  // A reload or new session starts from an empty office.
+  // A reload or new session starts from an empty office; history stays.
   on('session.start', async ($, e, next) => {
-    await update($, office, () => ({ agents: [], selected: null }))
+    await update($, office, (o: Office) => ({ ...o, agents: [], selected: null }))
     return next(e)
   })
 
@@ -53,7 +53,14 @@ export const register: Register = on => {
   })
   on('turn.complete', async ($, e, next) => {
     const id = e.agentId ?? 'main'
-    await change($, (o, now) => edit(o, id, a => ({ ...a, out: true, since: now, bubble: null })))
+    await change($, (o, now) => {
+      const a = o.agents.find(x => x.id === id && !x.out)
+      if (!a) return o
+      // Leave no sooner than MIN_SEAT after sitting down, so quick agents are seen working.
+      const leaveAt = Math.max(now, a.since + walkMs(a.desk) + MIN_SEAT)
+      const done: Agent = { ...a, id: `${a.id}@${now}`, out: true, bubble: null, ended: now }
+      return { ...edit(o, id, x => ({ ...x, out: true, since: leaveAt, bubble: null })), past: [done, ...o.past].slice(0, 30) }
+    })
     return next(e)
   })
 
@@ -129,9 +136,12 @@ export const register: Register = on => {
       )
     }
 
-    const sel = o.agents.find(a => a.id === o.selected) ?? main ?? o.agents[0]
+    const sel = [...o.agents, ...o.past].find(a => a.id === o.selected) ?? main ?? o.agents[0] ?? o.past[0]
     const asking = live.filter(a => a.bubble)
-    const status = (a: Agent) => (a.out ? 'leaving' : now - a.since < walkMs(a.desk) ? 'walking in' : a.bubble ? 'waiting on you' : 'working')
+    const status = (a: Agent) =>
+      a.ended ? `finished ${elapsed(now - a.ended)} ago` : a.out ? 'done, leaving' : now - a.since < walkMs(a.desk) ? 'walking in' : a.bubble ? 'waiting on you' : 'working'
+    const pick = (id: string) => () => update($, office, (x: Office) => ({ ...x, selected: id }))
+    const end = (a: Agent) => (a.ended ?? now)
 
     return (
       <Box flexDirection="column">
@@ -141,15 +151,33 @@ export const register: Register = on => {
               <Button
                 key={`a-${a.id}`}
                 label={`${sel?.id === a.id ? '● ' : ''}${a.label.slice(0, 22)} · ${fmtTok(a.tokIn + a.tokOut)}`}
-                onPress={() => update($, office, (x: Office) => ({ ...x, selected: a.id }))}
+                onPress={pick(a.id)}
               />
             ))}
           </Box>
           <Box flexDirection="row">
             <Text dimColor>{`Σ ${fmtTok(tok)} tokens  `}</Text>
+            <Button
+              key="hist"
+              label={`${o.showPast ? '▾' : '▸'} History (${o.past.length})`}
+              onPress={() => update($, office, (x: Office) => ({ ...x, showPast: !x.showPast }))}
+            />
             {toggle}
           </Box>
         </Box>
+
+        {o.showPast && (
+          <Box flexDirection="column" borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
+            {o.past.length === 0 && <Text dimColor>No finished work yet.</Text>}
+            {o.past.map(a => (
+              <Button
+                key={`p-${a.id}`}
+                label={`${sel?.id === a.id ? '● ' : '✓ '}${a.label.slice(0, 26)} · ${elapsed(end(a) - a.started)} · ${a.acts.length} items · ${fmtTok(a.tokIn + a.tokOut)} · ${elapsed(now - end(a))} ago`}
+                onPress={pick(a.id)}
+              />
+            ))}
+          </Box>
+        )}
 
         {asking.map(a => (
           <Box key={`q-${a.id}`} borderStyle="round" borderColor="warning" paddingLeft={1} paddingRight={1} flexDirection="column">
