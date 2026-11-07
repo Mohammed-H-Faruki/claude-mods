@@ -20,6 +20,7 @@ test('main works, a helper walks in, visits the library, finishes into history',
   on('agent.spawn', () => ({ model: 'x', agentId: 'sub1' }))
   on('turn.complete', () => ({ text: '' }))
   on('classic.SubagentStop', () => ({}))
+  on('classic.PermissionRequest', () => ({}))
   on('ui.render', () => ({}))
   on('ui.toast', () => ({ value: undefined }))
 
@@ -29,7 +30,9 @@ test('main works, a helper walks in, visits the library, finishes into history',
   await ui.unmount()
 
   await $.turn.start({ text: 'hi', turnId: 't1' })
+  // A bare "ask" (bypass mode answers it) is not an action; a shown dialog is.
   await $.tool.check({ tool: 'Bash', input: {} })
+  await ($ as any).classic.PermissionRequest({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'npm test' }, session_id: 's', transcript_path: '', cwd: '/' })
   await $.agent.spawn({ tool_use_id: 'u1', prompt: 'p', description: 'Find auth code', subagentType: 'Explore', provider: { plugin: 'engine', tier: 'core' } } as any)
   await $.tool.call({ tool: 'WebSearch', query: 'auth', agentId: 'sub1' } as any)
 

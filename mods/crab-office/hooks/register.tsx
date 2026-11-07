@@ -54,6 +54,11 @@ function todoOf(e: Record<string, unknown>): [number, number] | null {
   return [list.filter(t => t.status === 'completed').length, list.length]
 }
 
+async function needs($: any, id: string, bubble: string) {
+  await change($, o => edit(o, id, a => ({ ...a, bubble })))
+  $.ui.toast(`🦀 Action needed: ${bubble}`)
+}
+
 // What the person is being asked to do, in plain words.
 function actionText(tool: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>
@@ -127,12 +132,15 @@ export const register: Register = on => {
   on('tool.check', async ($, e, next) => {
     const r = await next(e)
     const id = e.agentId ?? 'main'
-    const bubble = e.tool === 'AskUserQuestion' || e.tool === 'ExitPlanMode' || r.decision === 'ask' ? actionText(e.tool, e.input) : null
-    if (bubble) {
-      await change($, o => edit(o, id, a => ({ ...a, bubble })))
-      $.ui.toast(`🦀 Action needed: ${bubble}`)
-    }
+    // Questions and plan reviews always go to the person. Other asks are only real
+    // when a dialog is shown (PermissionRequest below): in bypass mode the mode approves them.
+    if (e.tool === 'AskUserQuestion' || e.tool === 'ExitPlanMode') await needs($, id, actionText(e.tool, e.input))
     return r
+  })
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const id = (e as { agent_id?: string }).agent_id ?? 'main'
+    await needs($, id, actionText(e.tool_name, e.tool_input))
+    return next(e)
   })
 
   // Each tool call: log it, and walk to the station that tool lives at (or back to the desk).
