@@ -1,15 +1,21 @@
-import type { Agent, Job } from '../types'
+import type { Agent, Job, Place, Trip } from '../types'
+export type { Place }
+import { MUG, PAL, QUESTION, crabSprite, grid } from './sprites'
+import type { Face } from './sprites'
 
-const W = 800
-const H = 260
-const O = '#D97757' // Claude orange
-const DARK = '#2a1d17'
-const SPEED = 55 // px per second: a slow stroll
-export const MIN_SEAT = 8000 // a crab stays seated at least this long before leaving
-const DOOR = { x: 830, y: 218 }
-const CORRIDOR = 218
+// The scene is a 280x104 pixel grid drawn at x2: 560x208 CSS px, shown 1:1.
+const SCALE = 2
+export const W = 280 * SCALE
+export const H = 104 * SCALE
+const CORR = 27 // the walkway along the back wall (crab top-left y)
+export const WALK_DOOR = 1400 // brisk walk in from the door
+export const WALK_STATION = 1000 // desk <-> library / tools / skills
+export const MIN_SEAT = 3000 // a finished crab stays seated at least this long
+const COFFEE_AFTER = 180_000 // working this long earns a (visual) coffee break
+const COFFEE_EVERY = 90 // seconds per coffee loop
 
-const esc = (s: string) => s.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`)
+export const ACCENT = ['#5fb3ff', '#7ee081', '#f6c453', '#c58cff', '#ff7a90', '#4fd1c5']
+export const accentOf = (desk: number) => (desk < 0 ? PAL.o : ACCENT[desk % ACCENT.length])
 
 export function jobOfType(type: string): Job {
   if (type === 'Explore') return 'research'
@@ -18,209 +24,314 @@ export function jobOfType(type: string): Job {
   return 'write'
 }
 
-// Desk -1 is the main desk; 0..5 a 3x2 grid of subagent desks.
-export function seat(desk: number) {
-  if (desk < 0) return { cx: 120, chairY: 72, deskY: 88, w: 140, gx: 214 }
-  const cx = 320 + (desk % 3) * 150
-  const chairY = desk < 3 ? 72 : 148
-  return { cx, chairY, deskY: chairY + 16, w: 110, gx: cx - 77 }
+// Which station a tool sends the crab to; everything else is desk work.
+// Searching (web or code) is library work; running commands or MCP tools is tool-rack work;
+// reading and editing files stays at the desk.
+export function placeOf(tool: string): Place {
+  if (/^(WebSearch|WebFetch|Grep|Glob)$|^mcp__(Claude_Browser|claude-in-chrome|plugin_browser-use)/.test(tool)) return 'library'
+  if (/^(Skill|ToolSearch|SearchSkills|ListSkills|SearchPlugins|ListPlugins)$|^mcp__plugin_/.test(tool)) return 'skills'
+  if (/^(Bash|PowerShell|Monitor)$/.test(tool) || tool.startsWith('mcp__')) return 'tools'
+  return 'desk'
 }
 
 type Pt = { x: number; y: number }
-function route(desk: number): Pt[] {
-  const s = seat(desk)
-  return [DOOR, { x: s.gx, y: CORRIDOR }, { x: s.gx, y: s.chairY }, { x: s.cx, y: s.chairY }]
-}
-const len = (p: Pt[]) => p.slice(1).reduce((t, q, i) => t + Math.hypot(q.x - p[i].x, q.y - p[i].y), 0)
-export const walkMs = (desk: number) => (len(route(desk)) / SPEED) * 1000
 
-// Keyframes along the route, percentages by distance so the pace is even.
-function keyframes(name: string, pts: Pt[], fadeOut: boolean): string {
-  const total = len(pts)
+// Desk -1 is the main desk; 0..5 a 3x2 grid of subagent desks.
+export function seat(desk: number) {
+  if (desk < 0) return { cx: 42, top: 70, w: 60, x: 46, y: 63, gx: 78 }
+  const cx = 118 + (desk % 3) * 50
+  const top = desk < 3 ? 52 : 84
+  return { cx, top, w: 36, x: cx - 3, y: top - 7, gx: cx - 26 }
+}
+
+const STATION: Record<Exclude<Place, 'desk'>, Pt> = {
+  library: { x: 14, y: CORR },
+  skills: { x: 44, y: CORR },
+  tools: { x: 214, y: CORR },
+  door: { x: 266, y: CORR },
+}
+const COFFEE: Pt = { x: 238, y: CORR }
+
+const spot = (p: Place, desk: number): Pt => (p === 'desk' ? seat(desk) : STATION[p])
+
+// Desk -> side aisle -> walkway -> target. Stations sit on the walkway.
+export function route(a: Pt, b: Pt, desk: number): Pt[] {
+  const s = seat(desk)
+  const isSeat = (p: Pt) => p.x === s.x && p.y === s.y
+  const pts: Pt[] = [a]
+  if (isSeat(a)) pts.push({ x: s.gx, y: a.y }, { x: s.gx, y: CORR })
+  if (isSeat(b)) pts.push({ x: s.gx, y: CORR }, { x: s.gx, y: b.y })
+  pts.push(b)
+  return pts.filter((p, i) => i === 0 || p.x !== pts[i - 1].x || p.y !== pts[i - 1].y)
+}
+
+const tripMs = (t: Trip) => (t.from === 'door' || t.to === 'door' ? (t.to === 'door' ? WALK_DOOR + 200 : WALK_DOOR) : WALK_STATION)
+export const tripDone = (t: Trip, now: number) => now - t.since >= tripMs(t)
+
+const dist = (p: Pt[]) => p.slice(1).reduce((t, q, i) => t + Math.abs(q.x - p[i].x) + Math.abs(q.y - p[i].y), 0)
+
+const at = (p: Pt) => `transform:translate(${p.x}px,${p.y}px)`
+
+// Keyframe stops along `pts`, spread over [from%, to%] by distance so the pace is even.
+function stops(pts: Pt[], from: number, to: number, fade = false): string {
+  const total = dist(pts) || 1
   let d = 0
-  const stops = pts.map((p, i) => {
-    if (i) d += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)
-    const op = fadeOut && i === pts.length - 1 ? ';opacity:0' : ''
-    return `${((d / total) * 100).toFixed(2)}%{transform:translate(${p.x}px,${p.y + 10}px)${op}}`
-  })
-  return `@keyframes ${name}{${stops.join('')}}`
+  return pts
+    .map((p, i) => {
+      if (i) d += Math.abs(p.x - pts[i - 1].x) + Math.abs(p.y - pts[i - 1].y)
+      return `${(from + (d / total) * (to - from)).toFixed(2)}%{${at(p)}${fade && i === pts.length - 1 ? ';opacity:0' : ''}}`
+    })
+    .join('')
+}
+const keyframes = (name: string, pts: Pt[], fade: boolean) => `@keyframes ${name}{${stops(pts, 0, 100, fade)}}`
+
+// ---- living details ----------------------------------------------------------
+
+type Sky = 'day' | 'dusk' | 'night'
+// shortcut: uses the mod runtime's clock zone; fine on a local machine, off if the runtime runs in UTC.
+export function skyOf(now: number): Sky {
+  const h = new Date(now).getHours()
+  return h >= 7 && h < 17 ? 'day' : h >= 17 && h < 19 ? 'dusk' : 'night'
+}
+
+// Seconds into each hand's cycle, so a negative animation-delay lands the hand on the real time.
+export function clockDelays(now: number) {
+  const d = new Date(now)
+  const s = d.getSeconds() + d.getMilliseconds() / 1000
+  const m = d.getMinutes() * 60 + s
+  const hr = (d.getHours() % 12) * 3600 + m
+  return { s, m, h: hr }
 }
 
 const CSS = `
-.bob,.lg,.cl,.cr,.sit,.eye,.wr,.drip,.bub{transform-box:fill-box;transform-origin:50% 50%}
-.bob{animation:bob .32s ease-in-out infinite alternate}
-.bob .lg{animation:step .16s ease-in-out infinite alternate}
-.lg:nth-child(odd){animation-delay:.16s}
-.type .cl{animation:tap .2s ease-in-out var(--t) infinite alternate}
-.type .cr{animation:tap .2s ease-in-out calc(var(--t) + .1s) infinite alternate}
-.sit{animation:breathe 2s ease-in-out var(--t) infinite alternate}
-.eye{animation:blink 4s infinite}
-.wr{animation:shake .1s linear infinite alternate}
-.drip{animation:drip 1s ease-in infinite}
-.glow{animation:glow 1.6s ease-in-out infinite alternate}
-.bub{animation:bubin .35s cubic-bezier(.3,1.5,.5,1) both;transform-origin:50% 100%}
-@keyframes bob{to{transform:translateY(-3px)}}
-@keyframes step{to{transform:translateY(-2px)}}
-@keyframes tap{to{transform:translateY(4px)}}
-@keyframes breathe{to{transform:translateY(-1px)}}
-@keyframes blink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
-@keyframes shake{from{transform:translateX(-1px)}to{transform:translateX(1px)}}
-@keyframes drip{from{transform:translateY(0);opacity:1}to{transform:translateY(10px);opacity:0}}
-@keyframes glow{from{opacity:.45}to{opacity:.95}}
-@keyframes bubin{from{transform:scale(.2);opacity:0}to{transform:scale(1);opacity:1}}
+.lg,.cl,.cr,.eye,.bob,.sit,.wr,.it,.zz,.bub,.steam,.dot,.flick,.leaf{transform-box:fill-box;transform-origin:50% 50%}
+.walk .lg{animation:step .14s steps(2) infinite}
+.walk .lg:nth-child(odd){animation-delay:.07s}
+.walk{animation:bob .14s steps(2) infinite alternate}
+.type .cl{animation:tap .22s steps(2) infinite}
+.type .cr{animation:tap .22s steps(2) .11s infinite}
+.sit{animation:breathe 2.4s steps(2) infinite}
+.eye{animation:blink 4.2s steps(1) infinite}
+.wr{animation:shake .12s steps(2) infinite}
+.zz{animation:zz 2.4s linear infinite}
+.zz:nth-of-type(2){animation-delay:1.2s}
+.bub{animation:bob 1s steps(2) infinite alternate}
+.steam{animation:steam 1.6s linear infinite}
+.steam:nth-of-type(2){animation-delay:.8s}
+.dot{opacity:0;animation:show .01s steps(1) var(--th) forwards}
+.dot rect{animation:blinkdot 1.2s steps(1) infinite}
+.dot rect:nth-child(2){animation-delay:.4s}
+.dot rect:nth-child(3){animation-delay:.8s}
+.it{opacity:0;animation:show .01s steps(1) var(--arr) forwards}
+.flick{animation:flick 1.8s steps(3) infinite}
+.leaf{animation:sway 3s ease-in-out infinite alternate}
+.hh,.mm,.ss{transform-origin:0 0}
+.ss{animation:spin 60s linear infinite}
+.mm{animation:spin 3600s linear infinite}
+.hh{animation:spin 43200s linear infinite}
+.lon{animation:lights .6s steps(3) both}
+@keyframes step{50%{transform:translateY(-1px)}}
+@keyframes bob{to{transform:translateY(-1px)}}
+@keyframes tap{50%{transform:translateY(1px)}}
+@keyframes breathe{50%{transform:translateY(-.5px)}}
+@keyframes blink{0%,94%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
+@keyframes shake{50%{transform:translateX(.6px)}}
+@keyframes zz{from{transform:translate(0,0);opacity:1}to{transform:translate(3px,-7px);opacity:0}}
+@keyframes steam{from{transform:translateY(0);opacity:.8}to{transform:translateY(-4px);opacity:0}}
+@keyframes show{to{opacity:1}}
+@keyframes blinkdot{0%{opacity:1}50%{opacity:.25}}
+@keyframes flick{0%{opacity:1}33%{opacity:.7}66%{opacity:.9}}
+@keyframes sway{to{transform:rotate(4deg)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes lights{from{opacity:.4}to{opacity:0}}
 `
 
-// ---- static room ----------------------------------------------------------
+// ---- room ----------------------------------------------------------------------
 
-function windowAt(x: number): string {
-  return (
-    `<rect x="${x}" y="8" width="96" height="28" rx="2" fill="#141a2b"/>` +
-    `<rect x="${x + 3}" y="11" width="90" height="22" fill="url(#sky)"/>` +
-    `<polygon points="${x + 18},11 ${x + 32},11 ${x + 16},33 ${x + 3},33" fill="#fff" opacity=".18"/>` +
-    `<rect x="${x + 47}" y="11" width="2" height="22" fill="#141a2b"/>` +
-    `<rect x="${x - 3}" y="36" width="102" height="4" rx="1" fill="#6a7799"/>`
-  )
+const SKY: Record<Sky, [string, string]> = { day: ['#76b3ff', '#cfe6ff'], dusk: ['#f39a5a', '#6e5aa8'], night: ['#0d1630', '#25305a'] }
+
+function windowAt(x: number, sky: Sky): string {
+  const [top, bot] = SKY[sky]
+  let s = `<rect x="${x}" y="5" width="30" height="18" fill="#141b2e"/><rect x="${x + 1}" y="6" width="28" height="8" fill="${top}"/><rect x="${x + 1}" y="14" width="28" height="8" fill="${bot}"/>`
+  if (sky === 'night') s += grid(['....w.......w.....w..', '..........w.......w..', '.w.....w......w.....'], x + 3, 7) + `<rect x="${x + 22}" y="8" width="3" height="3" fill="#f3efd0"/>`
+  else if (sky === 'day') s += grid(['...wwww........', '..wwwwww...www.', '..........wwwww'], x + 4, 8)
+  else s += `<rect x="${x + 10}" y="17" width="8" height="5" fill="#ffd27a"/>`
+  s += `<rect x="${x + 14}" y="6" width="1" height="16" fill="#141b2e"/><rect x="${x - 1}" y="23" width="32" height="2" fill="#6a7799"/>`
+  return s
+}
+
+const BOOKS = ['#c0504d', '#4f81bd', '#9bbb59', '#f2c230', '#8064a2', '#4bacc6', '#f79646']
+
+function room(sky: Sky): string {
+  let s = ''
+  // back wall, wainscot, trim
+  s += `<rect width="280" height="34" fill="#2b3656"/><rect y="24" width="280" height="10" fill="#243050"/><rect y="24" width="280" height="1" fill="#3b4870"/>`
+  // floor planks with staggered seams
+  s += `<rect y="34" width="280" height="70" fill="#8d6243"/>`
+  for (let r = 0; r < 12; r++) {
+    const y = 34 + r * 6
+    s += `<rect y="${y}" width="280" height="1" fill="#6f4c33"/>`
+    for (let x = (r % 2) * 18; x < 280; x += 36) s += `<rect x="${x}" y="${y}" width="1" height="6" fill="#7a5539"/>`
+  }
+  s += `<rect y="34" width="280" height="2" fill="#1c2238" opacity=".5"/>`
+  // window light on the floor (day)
+  if (sky === 'day') for (const x of [104, 160]) s += `<polygon points="${x},36 ${x + 30},36 ${x + 48},70 ${x + 18},70" fill="#fff" opacity=".06"/>`
+  // library: tall bookshelf
+  s += `<rect x="4" y="3" width="32" height="32" fill="#5a3b26"/><rect x="5" y="4" width="30" height="30" fill="#3d2818"/>`
+  for (let r = 0; r < 4; r++) {
+    for (let i = 0; i < 9; i++) s += `<rect x="${6 + i * 3}" y="${5 + r * 7 + ((i * 7 + r) % 3 === 0 ? 1 : 0)}" width="2" height="${(i * 7 + r) % 3 === 0 ? 5 : 6}" fill="${BOOKS[(i + r * 3) % BOOKS.length]}"/>`
+    s += `<rect x="5" y="${11 + r * 7}" width="30" height="1" fill="#5a3b26"/>`
+  }
+  // skills & plugins cabinet: glass case with glowing scrolls and plug icons
+  s += `<rect x="40" y="6" width="18" height="28" fill="#2a2f45"/><rect x="41" y="7" width="16" height="26" fill="#3a6f8f" opacity=".55"/>`
+  s += grid(['yww.yww', '.......', 'kyk.kyk', '.k...k.', '.......', 'ywwy...', '...pwwp'], 43, 9) + `<rect x="41" y="7" width="3" height="26" fill="#fff" opacity=".12"/>`
+  // windows
+  s += windowAt(104, sky) + windowAt(160, sky)
+  // wall clock (hands added per draw)
+  s += `<circle cx="198" cy="13" r="7" fill="#f3efe4" stroke="#141b2e" stroke-width="1.2"/>`
+  // tool rack: pegboard with hanging tools
+  s += `<rect x="208" y="6" width="22" height="18" fill="#b98f62"/>` + grid(['.g...k..yy...g.', 'ggg..k..yy..ggg', '.g..kkk.yy...g.', '.g...k..yy...g.', '.g......yy...g.', '........y......'], 212, 9)
+  s += `<rect x="206" y="24" width="26" height="3" fill="#6b4a35"/>`
+  // coffee counter + machine
+  s += `<rect x="234" y="22" width="26" height="12" fill="#6b4a35"/><rect x="234" y="21" width="26" height="2" fill="#8a6447"/>`
+  s += `<rect x="238" y="10" width="12" height="11" fill="#30323c"/><rect x="240" y="13" width="8" height="4" fill="#1a1b22"/><rect x="246" y="11" width="2" height="1" fill="#e35d5d"/>` + MUG.replace(/<rect x="(\d+)" y="(\d+)"/g, (_, x, y) => `<rect x="${+x + 241}" y="${+y + 17}"`)
+  s += `<rect class="steam" x="242" y="14" width="1" height="2" fill="#fff" opacity=".7"/><rect class="steam" x="244" y="14" width="1" height="2" fill="#fff" opacity=".7"/>`
+  // door
+  s += `<rect x="264" y="4" width="14" height="30" fill="#1a2238"/><rect x="265" y="5" width="12" height="29" fill="#7a5539"/><rect x="266" y="7" width="10" height="11" fill="#6a4a31"/><rect x="266" y="20" width="10" height="11" fill="#6a4a31"/><rect x="275" y="19" width="1" height="2" fill="#f2c230"/>`
+  // rug under the main desk, plants
+  s += `<rect x="4" y="56" width="84" height="44" fill="#4a3f7a"/><rect x="6" y="58" width="80" height="40" fill="none" stroke="#c9b27a" stroke-width="1" opacity=".55"/>`
+  s += plant(92, 92) + plant(268, 90)
+  return s
 }
 
 function plant(x: number, y: number): string {
-  return (
-    `<ellipse cx="${x}" cy="${y + 9}" rx="11" ry="4" fill="#000" opacity=".25"/><circle cx="${x}" cy="${y}" r="9" fill="#8b4a2b"/><circle cx="${x}" cy="${y}" r="7" fill="#5a3320"/>` +
-    `<ellipse cx="${x - 6}" cy="${y - 5}" rx="7" ry="4" fill="#2f7d45" transform="rotate(-35 ${x - 6} ${y - 5})"/><ellipse cx="${x + 6}" cy="${y - 6}" rx="7" ry="4" fill="#4cb36a" transform="rotate(35 ${x + 6} ${y - 6})"/><ellipse cx="${x}" cy="${y - 9}" rx="4" ry="7" fill="#3f9b56"/>`
-  )
+  return `<rect x="${x}" y="${y + 6}" width="8" height="6" fill="#9a5434"/><rect x="${x}" y="${y + 6}" width="8" height="1" fill="#b8663f"/><g class="leaf">${grid(['..ll..', '.llLl.', 'lLllLl', '.lllL.'], x + 1, y + 1, { l: '#3f9b56', L: '#5cc070' })}</g>`
 }
 
-function room(): string {
-  const books = ['#c0504d', '#4f81bd', '#9bbb59', '#f2c230', '#8064a2', '#4bacc6', '#f79646', '#c0504d', '#4f81bd', '#9bbb59']
-  return (
-    `<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7fb5ff"/><stop offset="1" stop-color="#d6ebff"/></linearGradient>` +
-    `<pattern id="plank" width="72" height="12" patternUnits="userSpaceOnUse"><rect width="72" height="12" fill="#8a6343"/><rect width="72" height="1" fill="#6e4d33"/><rect x="40" width="1" height="12" fill="#6e4d33"/></pattern>` +
-    `<pattern id="carpet" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#47507a"/><rect width="4" height="4" fill="#4c5682"/><rect x="4" y="4" width="4" height="4" fill="#4c5682"/></pattern>` +
-    `<radialGradient id="light" cx=".5" cy="0" r="1"><stop offset="0" stop-color="#fff6d8" stop-opacity=".16"/><stop offset="1" stop-color="#fff6d8" stop-opacity="0"/></radialGradient></defs>` +
-    // walls and floor
-    `<rect width="${W}" height="${H}" fill="#171b29"/>` +
-    `<rect x="10" y="0" width="${W - 20}" height="44" fill="#34406a"/><rect x="10" y="40" width="${W - 20}" height="4" fill="#232b48"/>` +
-    [40, 250, 400, 550].map(windowAt).join('') +
-    `<rect x="10" y="44" width="${W - 20}" height="${H - 52}" fill="url(#plank)"/>` +
-    // lounge carpet bottom-left
-    `<rect x="18" y="160" width="182" height="88" rx="6" fill="url(#carpet)"/>` +
-    // light pools under windows
-    [40, 250, 400, 550].map(x => `<ellipse cx="${x + 48}" cy="60" rx="80" ry="40" fill="url(#light)"/>`).join('') +
-    // door on the right wall
-    `<rect x="790" y="196" width="10" height="44" fill="url(#plank)"/><rect x="776" y="200" width="14" height="36" rx="2" fill="#6b4e3a"/><path d="M790 196 L770 186" stroke="#8a6a50" stroke-width="3"/>` +
-    // walls
-    `<rect x="0" y="0" width="10" height="${H}" fill="#232b48"/><rect x="790" y="0" width="10" height="196" fill="#232b48"/><rect x="790" y="240" width="10" height="20" fill="#232b48"/><rect x="0" y="${H - 8}" width="${W}" height="8" fill="#232b48"/>` +
-    // lounge: sofa, coffee table
-    `<rect x="30" y="222" width="150" height="22" rx="6" fill="#7c4f8f"/><rect x="34" y="226" width="44" height="14" rx="4" fill="#9566a8"/><rect x="83" y="226" width="44" height="14" rx="4" fill="#9566a8"/><rect x="132" y="226" width="44" height="14" rx="4" fill="#9566a8"/>` +
-    `<rect x="70" y="180" width="76" height="26" rx="4" fill="#6b4a35"/><rect x="80" y="186" width="18" height="12" fill="#f1ead8"/><circle cx="128" cy="192" r="5" fill="#efe7d6"/>` +
-    // bookshelf, water cooler, printer on the right
-    `<rect x="688" y="46" width="94" height="14" fill="#5a3b26"/>` + books.map((c, i) => `<rect x="${692 + i * 9}" y="48" width="7" height="10" fill="${c}"/>`).join('') +
-    `<rect x="740" y="96" width="22" height="22" rx="3" fill="#e8edf3"/><circle cx="751" cy="94" r="8" fill="#7cc4ff" opacity=".85"/>` +
-    `<rect x="700" y="132" width="40" height="26" rx="3" fill="#cfd5de"/><rect x="706" y="136" width="28" height="6" fill="#2b2f3a"/>` +
-    plant(26, 62) + plant(772, 160) + plant(210, 236) +
-    // clock
-    `<circle cx="210" cy="22" r="11" fill="#f3efe4" stroke="#141a2b" stroke-width="2"/><path d="M210 22 V15 M210 22 L215 25" stroke="#141a2b" stroke-width="1.6" stroke-linecap="round"/>`
-  )
-}
-const ROOM = room()
+const ROOMS: Partial<Record<Sky, string>> = {}
+const roomFor = (sky: Sky) => (ROOMS[sky] ??= room(sky))
+
+// ---- furniture -------------------------------------------------------------------
 
 function chair(desk: number): string {
-  const { cx, chairY } = seat(desk)
-  return `<circle cx="${cx}" cy="${chairY}" r="12" fill="#2e3347"/><rect x="${cx - 13}" y="${chairY - 17}" width="26" height="8" rx="4" fill="#454d70"/>`
+  const { x, y } = seat(desk)
+  return `<rect x="${x + 2}" y="${y - 3}" width="12" height="9" fill="#4a3a5e"/><rect x="${x + 1}" y="${y - 2}" width="14" height="7" fill="#4a3a5e"/><rect x="${x + 3}" y="${y - 2}" width="10" height="2" fill="#6a5585"/>`
 }
 
-function desk(d: number, label: string, on: boolean): string {
-  const { cx, deskY, w } = seat(d)
+function deskSprite(desk: number, on: boolean, active: boolean, night: boolean): string {
+  const { cx, top, w } = seat(desk)
   const x = cx - w / 2
-  const mons = d < 0 ? [cx - 34, cx + 4] : [cx - 15]
-  return (
-    `<rect x="${x + 3}" y="${deskY + 6}" width="${w}" height="32" rx="3" fill="#000" opacity=".25"/>` +
-    `<rect x="${x}" y="${deskY}" width="${w}" height="28" rx="3" fill="#b9875c"/><rect x="${x}" y="${deskY + 26}" width="${w}" height="6" rx="2" fill="#7a4f33"/>` +
-    `<rect x="${cx - 13}" y="${deskY + 3}" width="26" height="5" rx="1" fill="#d9dde6"/>` +
-    mons.map(m =>
-      `<rect x="${m}" y="${deskY + 10}" width="30" height="9" rx="1.5" fill="#1b1c22"/><rect x="${m + 13}" y="${deskY + 19}" width="4" height="3" fill="#1b1c22"/>` +
-      (on ? `<rect class="glow" x="${m + 1}" y="${deskY + 8}" width="28" height="2" fill="#7dd3fc"/>` : ''),
-    ).join('') +
-    `<rect x="${x + w - 18}" y="${deskY + 6}" width="7" height="7" rx="1.5" fill="#efe7d6"/><rect x="${x + 6}" y="${deskY + 8}" width="14" height="10" fill="#f1ead8" transform="rotate(-8 ${x + 13} ${deskY + 13})"/>` +
-    `<text x="${cx}" y="${deskY + 31}" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="5.5" font-weight="700" letter-spacing=".5" fill="#f5e6d3">${esc(label.toUpperCase().slice(0, 22))}</text>`
-  )
-}
-
-// ---- crabs ------------------------------------------------------------------
-
-function outfit(job: Job): string {
-  if (job === 'lead')
-    return `<path d="M-13 -38 L-13 -48 L-7 -43 L0 -51 L7 -43 L13 -48 L13 -38 Z" fill="#f2c230" stroke="#c99a12" stroke-width="1"/><circle cx="0" cy="-45" r="1.8" fill="#d94b4b"/><rect x="-22" y="-33" width="4" height="10" rx="2" fill="#2b2b33"/><path d="M-20 -24 q-4 4 4 6" stroke="#2b2b33" stroke-width="1.5" fill="none"/>`
-  if (job === 'research')
-    return `<rect x="-16" y="-47" width="32" height="10" rx="4" fill="#7a5a3a"/><rect x="-22" y="-40" width="20" height="3.5" rx="1.5" fill="#5e4329"/><circle cx="-8.5" cy="-31" r="6" fill="#fff" fill-opacity=".3" stroke="#2c2c34" stroke-width="1.4"/><circle cx="8.5" cy="-31" r="6" fill="#fff" fill-opacity=".3" stroke="#2c2c34" stroke-width="1.4"/><path d="M-2.5 -31 H2.5" stroke="#2c2c34" stroke-width="1.4"/>`
-  if (job === 'write')
-    return `<ellipse cx="3" cy="-42" rx="16" ry="7" fill="#7b4fa8"/><circle cx="3" cy="-49" r="2.5" fill="#5d3a82"/><rect x="15" y="-46" width="3.5" height="16" rx="1" fill="#f2c230" transform="rotate(18 16 -38)"/><path d="M-20 -14 H20" stroke="#2fa39a" stroke-width="5"/>`
-  if (job === 'build')
-    return `<path d="M-17 -38 A17 14 0 0 1 17 -38 Z" fill="#f2c230"/><rect x="-21" y="-39" width="42" height="4" rx="2" fill="#d9a91d"/><rect x="-20" y="-20" width="40" height="3" fill="#f6e34a"/><rect x="-20" y="-14" width="40" height="3" fill="#f6e34a"/>`
-  return `<rect x="-12" y="-53" width="24" height="15" rx="2" fill="#243b6b"/><rect x="-18" y="-40" width="36" height="3.5" rx="1.5" fill="#1b2d52"/><rect x="-12" y="-44" width="24" height="3" fill="#d94b4b"/><path d="M-3 -22 L3 -22 L5 -11 L0 -8 L-5 -11 Z" fill="#d94b4b"/>`
-}
-
-// Front view, origin at the feet, ~38px tall before the 0.62 scale.
-function crab(job: Job, mode: string, worried: boolean): string {
-  const legs = [-15, -7, 3, 11].map(x => `<rect class="lg" x="${x}" y="-9" width="4" height="9" rx="1" fill="${O}"/>`).join('')
-  const eyeH = worried ? 8 : 6
-  const eyes = `<rect class="eye" x="-11" y="-34" width="5" height="${eyeH}" fill="${DARK}"/><rect class="eye" x="6" y="-34" width="5" height="${eyeH}" fill="${DARK}"/>`
-  const mouth = worried
-    ? `<path d="M-5 -19 q2.5 -3 5 0 q2.5 3 5 0" stroke="${DARK}" stroke-width="1.6" fill="none" stroke-linecap="round"/><path class="drip" d="M25 -42 q-3 5 0 7 q3 -2 0 -7z" fill="#7cc4ff"/>`
-    : `<path d="M-5 -20 q5 4 10 0" stroke="${DARK}" stroke-width="1.6" fill="none" stroke-linecap="round"/>`
-  return (
-    `<g transform="scale(.62)"><g class="${mode} ${worried ? 'wr' : ''}">${legs}` +
-    `<ellipse cx="0" cy="1" rx="20" ry="4" fill="#000" opacity=".25"/>` +
-    `<rect x="-20" y="-38" width="40" height="30" rx="7" fill="${O}"/>` +
-    `<rect class="cl" x="-34" y="-24" width="14" height="10" rx="3" fill="${O}"/><rect class="cr" x="20" y="-24" width="14" height="10" rx="3" fill="${O}"/>` +
-    eyes + mouth + outfit(job) +
-    `</g></g>`
-  )
-}
-
-function agentSvg(a: Agent, now: number, css: string[]): string {
-  const el = (now - a.since) / 1000
-  const dur = walkMs(a.desk) / 1000
-  const id = 'w' + a.id.replace(/[^a-zA-Z0-9]/g, '')
-  const { cx, chairY } = seat(a.desk)
-  const worried = !!a.bubble
-  if (a.out) {
-    if (el >= dur) return ''
-    // A leave set in the future (MIN_SEAT) holds the first frame, at the chair, until then.
-    css.push(keyframes(id, [...route(a.desk)].reverse(), true))
-    if (el < 0) return `<g style="animation:${id} ${dur.toFixed(2)}s linear ${(-el).toFixed(2)}s both"><g class="sit">${crab(a.job, 'rest', worried)}</g></g>`
-    return `<g style="animation:${id} ${dur.toFixed(2)}s linear ${(-el).toFixed(2)}s both"><g class="bob">${crab(a.job, 'walk', worried)}</g></g>`
+  const mons = desk < 0 ? [x + 4, x + 17] : [x + 2]
+  let s = `<rect x="${x + 1}" y="${top + 11}" width="${w}" height="2" fill="#000" opacity=".25"/>`
+  s += `<rect x="${x}" y="${top}" width="${w}" height="3" fill="#c99566"/><rect x="${x}" y="${top + 3}" width="${w}" height="6" fill="#8a5a3a"/><rect x="${x}" y="${top + 3}" width="${w}" height="1" fill="#a06c46"/>`
+  s += `<rect x="${x + w - 15}" y="${top + 4}" width="10" height="4" fill="#7a4e31"/><rect x="${x + w - 11}" y="${top + 5}" width="2" height="1" fill="#d9b88a"/>`
+  s += `<rect x="${x + 1}" y="${top + 9}" width="2" height="3" fill="#5a3a24"/><rect x="${x + w - 3}" y="${top + 9}" width="2" height="3" fill="#5a3a24"/>`
+  s += `<rect x="${x + 2}" y="${top + 5}" width="3" height="2" fill="${accentOf(desk)}"/>`
+  for (const m of mons) {
+    s += `<rect x="${m}" y="${top - 8}" width="11" height="8" fill="#22232b"/><rect x="${m + 4}" y="${top}" width="3" height="1" fill="#22232b"/>`
+    s += on
+      ? `<g class="${active ? 'flick' : ''}"><rect x="${m + 1}" y="${top - 7}" width="9" height="6" fill="#2f6fb3"/><rect x="${m + 2}" y="${top - 6}" width="5" height="1" fill="#bfe3ff"/><rect x="${m + 2}" y="${top - 4}" width="7" height="1" fill="#8fd0ff"/><rect x="${m + 2}" y="${top - 2}" width="4" height="1" fill="#bfe3ff"/></g>`
+      : `<rect x="${m + 1}" y="${top - 7}" width="9" height="6" fill="#121726"/>`
   }
-  const t = `--t:${Math.max(0, dur - el).toFixed(2)}s`
-  if (el < dur) {
-    css.push(keyframes(id, route(a.desk), false))
-    // Walk, then the bob stops as it sits (iteration count covers the walk).
-    const bobs = Math.max(1, Math.ceil((dur - el) / 0.32))
-    return `<g style="animation:${id} ${dur.toFixed(2)}s linear ${(-el).toFixed(2)}s both;${t}"><g class="bob" style="animation-iteration-count:${bobs}">${crab(a.job, worried ? 'rest' : 'type', worried)}</g></g>`
-  }
-  return `<g transform="translate(${cx} ${chairY + 10})" style="${t}"><g class="sit">${crab(a.job, worried ? 'rest' : 'type', worried)}</g></g>`
+  const kx = seat(desk).x + 4
+  s += `<rect x="${kx}" y="${top + 1}" width="8" height="1" fill="#d9dde6"/>`
+  s += MUG.replace(/<rect x="(\d+)" y="(\d+)"/g, (_, mx, my) => `<rect x="${+mx + x + w - 5}" y="${+my + top - 3}"`)
+  if (night) s += `<circle cx="${x + w - 9}" cy="${top - 2}" r="9" fill="#ffd27a" opacity=".12"/><rect x="${x + w - 10}" y="${top - 5}" width="3" height="2" fill="#f2c230"/><rect x="${x + w - 9}" y="${top - 3}" width="1" height="3" fill="#30323c"/>`
+  return s
 }
 
-// A "?" thought bubble only: the question itself is crisp text in the band.
-function bubble(a: Agent): string {
-  const { cx, chairY } = seat(a.desk)
-  const x = cx + 22
-  const y = Math.max(16, chairY - 34)
-  return (
-    `<g class="bub"><circle cx="${x - 9}" cy="${y + 17}" r="2.5" fill="#fff" stroke="#888"/><circle cx="${x - 4}" cy="${y + 11}" r="3.5" fill="#fff" stroke="#888"/>` +
-    `<circle cx="${x + 6}" cy="${y - 2}" r="13" fill="#fff" stroke="#888"/>` +
-    `<text x="${x + 6}" y="${y + 5}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="19" font-weight="800" fill="#D97757">?</text></g>`
-  )
+// ---- crabs -------------------------------------------------------------------------
+
+const ITEM: Record<string, string> = {
+  library: grid(['bwwb', 'bwwb', 'bbbb'], 12, 2, { ...PAL, b: '#8a4b2a' }),
+  tools: grid(['g.g', 'ggg', '.g.', '.g.'], 13, 1),
+  skills: grid(['ywwy', '.ww.', 'ywwy'], 12, 2),
+  coffee: MUG.replace(/<rect x="(\d+)" y="(\d+)"/g, (_, x, y) => `<rect x="${+x + 13}" y="${+y + 2}"`),
 }
+
+function body(a: Agent, mode: 'walk' | 'type' | 'rest', face: Face, extra = ''): string {
+  return `<g class="${mode} ${face === 'wide' ? 'wr' : ''}">${crabSprite(a.job, face)}${extra}</g>`
+}
+
+function overlays(a: Agent, now: number, seated: boolean): string {
+  let s = ''
+  if (a.bubble) s += `<g class="bub" transform="translate(12 -12)">${QUESTION}</g>`
+  else if (a.asleep) s += `<g transform="translate(14 -6)">${grid(['ee.', '.e.', 'ee.'], 0, 0, { e: '#cfd8ff' }).replace(/<rect/g, '<rect class="zz"')}${grid(['ee', 'ee'], 4, -3, { e: '#cfd8ff' }).replace(/<rect/g, '<rect class="zz"')}</g>`
+  else if (seated) {
+    const th = Math.max(0, 8 - (now - a.lastToolAt) / 1000)
+    s += `<g class="dot" style="--th:${th.toFixed(2)}s" transform="translate(13 -4)"><rect x="0" y="0" width="1" height="1" fill="#fff"/><rect x="2" y="0" width="1" height="1" fill="#fff"/><rect x="4" y="0" width="1" height="1" fill="#fff"/></g>`
+  }
+  return s
+}
+
+const settled = (a: Agent, now: number) => a.trip.to === 'desk' && tripDone(a.trip, now)
+export const wantsCoffee = (a: Agent, now: number) =>
+  settled(a, now) && !a.asleep && !a.bubble && !a.out && now - a.started > COFFEE_AFTER
+
+function crabAt(a: Agent, now: number, css: string[]): string {
+  const t = a.trip
+  const from = spot(t.from, a.desk)
+  const to = spot(t.to, a.desk)
+  const id = 'c' + a.id.replace(/[^a-zA-Z0-9]/g, '')
+  const ms = tripMs(t)
+  const el = now - t.since
+  const face: Face = a.asleep ? 'shut' : a.bubble ? 'wide' : 'open'
+  const atDesk = t.to === 'desk'
+
+  // On the move (or a delayed leave not started yet: held at the start).
+  if (el < ms) {
+    const pts = t.from === 'desk' && t.to === 'desk' ? [to] : route(from, to, a.desk)
+    css.push(keyframes(id, pts, t.to === 'door'))
+    const item = t.to !== 'desk' && t.to !== 'door' ? `<g class="it" style="--arr:${((ms - el) / 1000).toFixed(2)}s">${ITEM[t.to]}</g>` : ''
+    const moving = el >= 0
+    return `<g style="animation:${id} ${(ms / 1000).toFixed(2)}s linear ${(-el / 1000).toFixed(2)}s both">${body(a, moving ? 'walk' : 'rest', face, item)}${moving ? '' : overlays(a, now, true)}</g>`
+  }
+  if (t.to === 'door') return ''
+
+  // Arrived. At a station: browse/fetch with the item in claw.
+  if (!atDesk) return `<g transform="translate(${to.x} ${to.y})"><g class="sit">${body(a, 'type', face, `<g class="it" style="--arr:0s">${ITEM[t.to]}</g>`)}${overlays(a, now, false)}</g></g>`
+
+  // At the desk. A long-running agent takes a looping coffee trip (visual only):
+  // 3s there, 5s sipping, 3s back, then work until the 90s loop comes round.
+  const working = now - a.started
+  if (wantsCoffee(a, now)) {
+    css.push(`@keyframes ${id}g{${stops(route(to, COFFEE, a.desk), 0, 3.3)}${stops(route(COFFEE, to, a.desk), 8.9, 12.2)}100%{${at(to)}}}`)
+    css.push(`@keyframes ${id}m{0%,3.2%{opacity:0}3.3%,12.2%{opacity:1}12.3%,100%{opacity:0}}`)
+    const phase = ((working - COFFEE_AFTER) / 1000) % COFFEE_EVERY
+    const d = `${(-phase).toFixed(2)}s`
+    return `<g style="animation:${id}g ${COFFEE_EVERY}s linear ${d} infinite"><g class="sit">${body(a, 'type', face, `<g style="opacity:0;animation:${id}m ${COFFEE_EVERY}s steps(1) ${d} infinite">${ITEM.coffee}</g>`)}${overlays(a, now, true)}</g></g>`
+  }
+  return `<g transform="translate(${to.x} ${to.y})"><g class="sit">${body(a, a.asleep ? 'rest' : 'type', face)}${overlays(a, now, !a.asleep)}</g></g>`
+}
+
+// ---- scene ---------------------------------------------------------------------------
 
 export function scene(agents: Agent[], now: number): string {
   const css: string[] = []
-  const seated = (d: number) => agents.some(a => a.desk === d && !a.out && now - a.since >= walkMs(d))
-  const labelOf = (d: number) => (d < 0 ? 'Main' : agents.find(a => a.desk === d && !a.out)?.label ?? '')
-  let body = ''
-  for (const d of [-1, 0, 1, 2, 3, 4, 5]) body += chair(d) + desk(d, labelOf(d), seated(d))
-  // Crabs sit north of their desks, so drawing them after the furniture never hides them.
-  body += agents.map(a => agentSvg(a, now, css)).join('')
-  if (!agents.some(a => !a.out)) body += `<rect width="${W}" height="${H}" fill="#0a0d1c" opacity=".45"/>`
-  body += agents.filter(a => a.bubble && !a.out).map(bubble).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><style>${CSS}${css.join('')}</style>${ROOM}${body}</svg>`
+  const sky = skyOf(now)
+  const sitting = (a: Agent) => settled(a, now) && !wantsCoffee(a, now)
+  const occupant = (d: number) => agents.find(a => a.desk === d && !a.out && settled(a, now) && !a.asleep)
+  let furn = ''
+  for (const d of [-1, 0, 1, 2, 3, 4, 5]) {
+    const who = occupant(d)
+    furn += chair(d)
+    // seated crabs sit between chair and desk; walkers and coffee-goers are drawn on top
+    furn += agents.filter(a => a.desk === d && sitting(a)).map(a => crabAt(a, now, css)).join('')
+    furn += deskSprite(d, !!who, !!who && now - who.lastToolAt < 8000, sky === 'night')
+  }
+  const movers = agents.filter(a => !sitting(a))
+  const crabs = movers.map(a => crabAt(a, now, css)).join('')
+
+  const { s, m, h } = clockDelays(now)
+  const hands =
+    `<g transform="translate(198 13)"><line class="hh" x1="0" y1="0" x2="0" y2="-3.5" stroke="#141b2e" stroke-width="1.4" style="animation-delay:-${h.toFixed(1)}s"/>` +
+    `<line class="mm" x1="0" y1="0" x2="0" y2="-5.5" stroke="#141b2e" stroke-width="1" style="animation-delay:-${m.toFixed(1)}s"/>` +
+    `<line class="ss" x1="0" y1="0" x2="0" y2="-5.5" stroke="#d94b4b" stroke-width=".5" style="animation-delay:-${s.toFixed(1)}s"/></g>`
+
+  const busy = agents.some(a => !a.asleep && !(a.out && a.trip.to === 'door' && tripDone(a.trip, now)))
+  const dim = busy ? '' : `<rect width="280" height="104" fill="#070a18" opacity="${sky === 'night' ? 0.45 : 0.3}"/>`
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" shape-rendering="crispEdges">` +
+    `<style>${CSS}${css.join('')}</style><g transform="scale(${SCALE})">${roomFor(sky)}${hands}${furn}${crabs}${dim}</g></svg>`
+  )
 }

@@ -13,8 +13,10 @@ export function actOf(e: Record<string, unknown>): Act {
   const tool = String(e.tool)
   const kind = KIND[tool] ?? 'other'
   const str = (k: string) => (typeof e[k] === 'string' ? (e[k] as string) : undefined)
+  // mcp__server__do_thing reads as do_thing
   const raw =
-    kind === 'other' ? tool
+    tool.startsWith('mcp__') ? tool.split('__').pop()!
+    : kind === 'other' ? tool
     : str('file_path') ?? str('notebook_path') ?? str('command') ?? str('pattern') ?? str('query') ?? str('url') ?? tool
   return { kind, target: raw.replace(/\s+/g, ' ').trim().slice(0, 120), n: 1 }
 }

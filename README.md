@@ -6,7 +6,7 @@ My Claude Code mods. Each one lives in `mods/<name>/`.
 
 | # | Name | What it does |
 |---|------|--------------|
-| 1 | `crab-office` | Pixel crabs work in an office above the prompt. The main agent works alone; each subagent gets a crab that walks in, sits and types, then walks out. Crabs stay seated a few seconds so quick agents are seen. Total session tokens sit in the header; one agent picker lists working and finished agents. Pick one to see its files as a tree, its tool calls, tokens and todo progress. Questions show as a clear banner. Compact mode is one line. |
+| 1 | `crab-office` | A pixel-art office above the prompt. The main crab works at its desk and naps when idle; each subagent gets a crab that walks in, works, and leaves. Crabs visit the library (searches, web), tool rack (commands, MCP tools) and skills cabinet (skills, plugins), and take coffee breaks on long tasks. The bar has Now, History, Details and Actions tabs, a session token total, and a 🔔 alert when something needs your approval. Compact mode is one line. |
 
 ## Install (for Claude Code: read this part)
 
