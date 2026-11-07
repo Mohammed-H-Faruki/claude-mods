@@ -1,1 +1,1 @@
-{ "name": "crab-office", "version": "2.1.0", "description": "Crabs work at desks while Claude works, pack up when it finishes, and ask in a bubble when Claude needs you.", "types": "./types/index.d.ts" }
+{ "name": "crab-office", "version": "2.1.1", "license": "MIT", "description": "Crabs work at desks while Claude works, pack up when it finishes, and ask in a bubble when Claude needs you.", "types": "./types/index.d.ts" }

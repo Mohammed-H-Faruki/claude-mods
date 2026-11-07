@@ -45,3 +45,7 @@ claude plugin update crab-office@claude-mods
 ## Add a new mod (for Claude Code)
 
 Copy the finished mod folder (without `.claude-plugin/types/`) to `mods/<name>/`, add a row to the table above and an entry to `.claude-plugin/marketplace.json` with `"source": "./mods/<name>"`, then commit and push.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

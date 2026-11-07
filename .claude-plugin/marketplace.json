@@ -3,6 +3,6 @@
   "description": "My Claude Code mods",
   "owner": { "name": "moham" },
   "plugins": [
-    { "name": "crab-office", "version": "2.1.0", "source": "./mods/crab-office", "description": "Pixel crabs work in an office above the prompt; subagents walk in and sit, and you can click one to see its work." }
+    { "name": "crab-office", "version": "2.1.1", "source": "./mods/crab-office", "description": "Pixel crabs work in an office above the prompt; subagents walk in and sit, and you can click one to see its work." }
   ]
 }
