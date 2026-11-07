@@ -5,7 +5,7 @@ import type { Agent, Job, Office } from '../types'
 import { MIN_SEAT, jobOfType, scene, walkMs } from './office'
 import { ICON, actOf, addAct, bar, elapsed, fmtTok, nowAct, tree } from './work'
 
-const office = atom({ plugin: 'crab-office', key: 'office' } as const, { agents: [], past: [], showPast: false, selected: null } as Office, { shape: 'office-3' })
+const office = atom({ plugin: 'crab-office', key: 'office' } as const, { agents: [], past: [], selected: null } as Office, { shape: 'office-4' })
 const compact = atom({ plugin: 'crab-office', key: 'compact' } as const, false, { shape: 'compact-1' })
 
 // No timers: walks are CSS keyframes placed by elapsed time at each draw, so a
@@ -112,12 +112,16 @@ export const register: Register = on => {
     const o = prune(await read($, office), now)
     const isCompact = await read($, compact)
     const ui = $.ui.resolve(e) as any
-    const { Box, Text, Button } = ui
+    const { Box, Text, Button, Select } = ui
 
     const live = o.agents.filter(a => !a.out)
     const main = live.find(a => a.id === 'main')
     const subs = live.length - (main ? 1 : 0)
-    const tok = o.agents.reduce((t, a) => t + a.tokIn + a.tokOut, 0)
+    // Session totals: finished work (past) plus agents still working; a leaving agent is already in past.
+    const counted = [...o.past, ...live]
+    const tokIn = counted.reduce((t, a) => t + a.tokIn, 0)
+    const tokOut = counted.reduce((t, a) => t + a.tokOut, 0)
+    const tok = tokIn + tokOut
     const doing = (a: Agent) => {
       const n = nowAct(a)
       return a.bubble ? '❓ waiting on you' : n ? `${ICON[n.kind]} ${n.target.split(/[\\/]/).pop()}` : 'thinking…'
@@ -140,43 +144,21 @@ export const register: Register = on => {
     const asking = live.filter(a => a.bubble)
     const status = (a: Agent) =>
       a.ended ? `finished ${elapsed(now - a.ended)} ago` : a.out ? 'done, leaving' : now - a.since < walkMs(a.desk) ? 'walking in' : a.bubble ? 'waiting on you' : 'working'
-    const pick = (id: string) => () => update($, office, (x: Office) => ({ ...x, selected: id }))
-    const end = (a: Agent) => (a.ended ?? now)
+    const end = (a: Agent) => a.ended ?? now
+    // One picker for everyone, working first, then finished (history), so the header never overflows.
+    const options = [
+      ...live.map(a => ({ value: a.id, label: `● ${a.label.slice(0, 28)} · ${fmtTok(a.tokIn + a.tokOut)}` })),
+      ...o.past.map(a => ({ value: a.id, label: `✓ ${a.label.slice(0, 28)} · ${fmtTok(a.tokIn + a.tokOut)} · ${elapsed(now - end(a))} ago` })),
+    ]
 
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
-          <Box flexDirection="row">
-            {o.agents.map(a => (
-              <Button
-                key={`a-${a.id}`}
-                label={`${sel?.id === a.id ? '● ' : ''}${a.label.slice(0, 22)} · ${fmtTok(a.tokIn + a.tokOut)}`}
-                onPress={pick(a.id)}
-              />
-            ))}
-          </Box>
-          <Box flexDirection="row">
-            <Text dimColor>{`Σ ${fmtTok(tok)} tokens  `}</Text>
-            <Button
-              key="hist"
-              label={`${o.showPast ? '▾' : '▸'} History (${o.past.length})`}
-              onPress={() => update($, office, (x: Office) => ({ ...x, showPast: !x.showPast }))}
-            />
-            {toggle}
-          </Box>
+          <Text bold>{`🦀 Σ ${fmtTok(tok)} tokens  (${fmtTok(tokIn)} in · ${fmtTok(tokOut)} out) · ${live.length} working · ${o.past.length} done`}</Text>
+          {toggle}
         </Box>
-
-        {o.showPast && (
-          <Box flexDirection="column" borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
-            {o.past.length === 0 && <Text dimColor>No finished work yet.</Text>}
-            {o.past.map(a => (
-              <Button
-                key={`p-${a.id}`}
-                label={`${sel?.id === a.id ? '● ' : '✓ '}${a.label.slice(0, 26)} · ${elapsed(end(a) - a.started)} · ${a.acts.length} items · ${fmtTok(a.tokIn + a.tokOut)} · ${elapsed(now - end(a))} ago`}
-                onPress={pick(a.id)}
-              />
-            ))}
-          </Box>
+        {sel && options.length > 0 && (
+          <Select key="agent" label="Agent: " options={options} value={sel.id} onSelect={(v: string) => update($, office, (x: Office) => ({ ...x, selected: v }))} />
         )}
 
         {asking.map(a => (
@@ -190,10 +172,11 @@ export const register: Register = on => {
 
         {sel && (
           <Box flexDirection="column" borderStyle="round" borderDimColor paddingLeft={1} paddingRight={1}>
-            <Text bold>{`${sel.label} · ${status(sel)} · ${elapsed(now - sel.started)} · ${sel.calls} tool calls · ${fmtTok(sel.tokIn)} in / ${fmtTok(sel.tokOut)} out`}</Text>
+            <Text bold>{`${sel.label} · ${status(sel)} · ${elapsed(end(sel) - sel.started)}`}</Text>
+            <Text dimColor>{`${sel.calls} tool calls · ${fmtTok(sel.tokIn)} in / ${fmtTok(sel.tokOut)} out`}</Text>
             {sel.todo && <Text>{`${bar(sel.todo[0], sel.todo[1])} ${sel.todo[0]}/${sel.todo[1]} todos`}</Text>}
             {sel.acts.length === 0 && <Text dimColor>Nothing touched yet.</Text>}
-            {tree(sel.acts).slice(-14).map(row => (
+            {tree(sel.acts).slice(-10).map(row => (
               <Text dimColor={!row.endsWith('◀ now')} bold={row.endsWith('◀ now')}>{row}</Text>
             ))}
           </Box>

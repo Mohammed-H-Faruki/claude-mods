@@ -29,8 +29,8 @@ export type Agent = {
   ended?: number
 }
 
-// past: finished agents (main's turns too), newest first, for the History view.
-export type Office = { agents: Agent[]; past: Agent[]; showPast: boolean; selected: string | null }
+// past: finished agents (main's turns too), newest first, listed in the agent picker.
+export type Office = { agents: Agent[]; past: Agent[]; selected: string | null }
 
 declare module 'claude-code' {
   interface PluginState {

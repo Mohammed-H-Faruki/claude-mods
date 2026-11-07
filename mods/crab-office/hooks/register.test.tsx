@@ -26,15 +26,15 @@ test('question shows as text; a subagent gets a crab, tokens and a file tree', a
 
   const ui = await $.ui.mount(BAND)
   expect(await ui.find({ type: 'Text', text: /May I use Bash\?/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /Main · .* · 0 tool calls/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^0 tool calls · / })).toBeTruthy()
   expect(JSON.stringify(await ui.find({ type: 'Svg' }))).toContain('FIND AUTH CODE')
-  expect(await ui.find({ type: 'Button', label: /Find auth code/ })).toBeTruthy()
+  expect(JSON.stringify(await ui.find({ type: 'Select' }))).toContain('Find auth code')
   await ui.unmount()
 
   // A finished subagent goes to History but stays seated a while first.
   await $.turn.complete({ turnId: 's1', agentId: 'sub1', reason: 'answer', answer: '' } as any)
   const ui2 = await $.ui.mount(BAND)
-  expect(await ui2.find({ type: 'Button', label: /History \(1\)/ })).toBeTruthy()
+  expect(await ui2.find({ type: 'Text', text: /1 done/ })).toBeTruthy()
   expect(JSON.stringify(await ui2.find({ type: 'Svg' }))).toMatch(/animation:wsub1 [0-9.]+s linear [1-9][0-9.]*s both.{0,20}sit/)
   await ui2.unmount()
 })
